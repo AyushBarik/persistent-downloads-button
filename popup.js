@@ -64,6 +64,9 @@ async function init() {
   // The toggle can be flipped while the popup is open, and Chrome doesn't
   // notify us, so poll until a read works. noteFileRead stops the poll.
   if (!hasFileSchemeAccess) probeTimer = setInterval(probeFileAccess, 1500);
+  // Even when the API reports access, verify with a real read — the API
+  // misses revoked site access and not-yet-applied toggle flips.
+  probeFileAccess();
 
   // Install the drop catcher on the active tab.
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
@@ -88,24 +91,30 @@ async function init() {
   chrome.downloads.onErased.addListener(scheduleRender);
 }
 
-// One plain fetch of any real download: succeeding proves file access is on.
-// No retry/backoff here — this poll is itself the retry, and missing access
-// is a permanent state until the user flips the toggle.
+// Prove file access with a real read: isAllowedFileSchemeAccess only
+// reflects the file-URLs toggle, so it stays true when access is broken
+// another way (site access revoked, or a toggle flip the browser hasn't
+// applied yet). Several candidates are tried so one deleted file doesn't
+// read as missing access.
 async function probeFileAccess() {
   const items = await chrome.downloads.search({
     orderBy: ['-startTime'],
     limit: MAX_ITEMS,
   });
-  const probe = items.find(
-    (i) => i.state === 'complete' && i.exists !== false && i.filename
-  );
-  if (!probe) return;
-  try {
-    await fetch(toFileUrl(probe.filename));
-    noteFileRead(true);
-  } catch {
-    // Still no access; the next tick will try again.
+  const candidates = items
+    .filter((i) => i.state === 'complete' && i.exists !== false && i.filename)
+    .slice(0, 3);
+  if (!candidates.length) return; // nothing on disk to prove it either way
+  for (const c of candidates) {
+    try {
+      await fetch(toFileUrl(c.filename));
+      noteFileRead(true);
+      return;
+    } catch {
+      // try the next candidate
+    }
   }
+  noteFileRead(false);
 }
 
 function scheduleRender() {
