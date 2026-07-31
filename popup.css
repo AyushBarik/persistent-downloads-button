@@ -1,0 +1,242 @@
+:root {
+  --bg: #ffffff;
+  --fg: #202124;
+  --fg-muted: #5f6368;
+  --hover: #f1f3f4;
+  --border: #e0e0e0;
+  --accent: #1a73e8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #292a2d;
+    --fg: #e8eaed;
+    --fg-muted: #9aa0a6;
+    --hover: #3c4043;
+    --border: #3c4043;
+    --accent: #8ab4f8;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 340px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.refresh-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.refresh-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.refresh-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.refresh-btn.spinning svg {
+  animation: fdb-spin 0.6s ease;
+}
+
+@keyframes fdb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.notice[hidden] {
+  display: none;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--hover);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-btn {
+  flex: none;
+  margin-left: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.list {
+  list-style: none;
+  padding: 4px 0 8px;
+  /* Rows are 48px tall (32px icon + 8px padding each side): show 5, scroll the rest. */
+  max-height: 252px;
+  overflow-y: auto;
+}
+
+/* Custom scrollbar: the thumb keeps a fixed minimum size (what it measured at
+   ~25 items) no matter how long the list gets — its travel just compresses. */
+.list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+  border: 2px solid var(--bg);
+  min-height: 52px;
+}
+
+.list::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-muted);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.item:active {
+  cursor: grabbing;
+}
+
+.item:hover {
+  background: var(--hover);
+}
+
+.item.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+/* Offscreen clone used as the drag image: same row, transparent background. */
+.drag-ghost {
+  position: fixed;
+  top: -200px;
+  left: 0;
+  background: transparent !important;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.item.missing {
+  opacity: 0.55;
+}
+
+.item .file-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+}
+
+.item .meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.item .name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item .sub {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item .show-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.item:hover .show-btn {
+  visibility: visible;
+}
+
+.item .show-btn:hover {
+  background: var(--border);
+  color: var(--fg);
+}
+
+.item .show-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--fg-muted);
+}

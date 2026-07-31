@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Persistent Download Button</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="header">
+    <span>Recent Download History</span>
+    <button id="refresh-btn" class="refresh-btn" title="Refresh — clear deleted files from the list">
+      <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+  </header>
+  <div id="file-access-notice" class="notice" hidden
+       title="If this stays after enabling, restart the browser — Brave sometimes doesn't apply the toggle until restart.">
+    <span class="notice-text"><b>Allow access to file URLs</b></span>
+    <button id="open-settings" class="notice-btn">Enable</button>
+  </div>
+  <ul id="list" class="list"></ul>
+  <div id="empty" class="empty" hidden>No recent downloads</div>
+  <script src="popup.js"></script>
+</body>
+</html>
