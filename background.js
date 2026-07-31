@@ -41,6 +41,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .executeScript({
         target: { tabId: msg.tabId },
         func: installDropCatcher,
+        // Without this, Chrome queues the injection until the page finishes
+        // parsing, and a drop on a still-loading page is silently lost.
+        injectImmediately: true,
       })
       .catch(() => {}); // page where scripts can't be injected
     return;

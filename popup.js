@@ -69,11 +69,7 @@ async function init() {
   probeFileAccess();
 
   // Install the drop catcher on the active tab.
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (tab) {
-      chrome.runtime.sendMessage({ type: 'fdbArmTab', tabId: tab.id }).catch(() => {});
-    }
-  });
+  armActiveTab();
 
   document.getElementById('refresh-btn').addEventListener('click', (ev) => {
     const btn = ev.currentTarget;
@@ -115,6 +111,17 @@ async function probeFileAccess() {
     }
   }
   noteFileRead(false);
+}
+
+// Ask the worker to install the drop catcher on the active tab. Called on
+// popup open and again on every dragstart: re-arming is idempotent, and the
+// page may have been reloaded (or still been loading) since the last arm.
+function armActiveTab() {
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    if (tab) {
+      chrome.runtime.sendMessage({ type: 'fdbArmTab', tabId: tab.id }).catch(() => {});
+    }
+  });
 }
 
 function scheduleRender() {
@@ -215,6 +222,7 @@ function buildRow(item) {
 function setupDrag(row, item, name) {
   row.addEventListener('dragstart', (ev) => {
     row.classList.add('dragging');
+    armActiveTab();
 
     // Use a clone of the row with a transparent background as the drag image.
     const rect = row.getBoundingClientRect();
