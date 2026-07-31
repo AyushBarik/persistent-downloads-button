@@ -27,6 +27,12 @@ const MIME_BY_EXT = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
+// The download currently being dragged out of the popup, set by the popup on
+// dragstart. A page only ever reports *that* a drop happened, never which
+// file to deliver, so it can't ask for a download the user didn't drag.
+const DRAG_TTL_MS = 30_000;
+let pendingDrag = null;
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
 
@@ -40,8 +46,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
+  if (msg.type === 'fdbDragStart') {
+    pendingDrag = { downloadId: msg.downloadId, at: Date.now() };
+    return;
+  }
+
+  // Popup's upload button. The id comes from the extension's own popup, not
+  // from a page, so it needs no drag to authorize it.
+  if (msg.type === 'fdbUpload') {
+    deliverFile(msg.downloadId, msg.tabId)
+      .then(sendResponse)
+      .catch((e) => {
+        console.error('upload failed:', e);
+        sendResponse({ ok: false, error: String(e) });
+      });
+    return true; // async response
+  }
+
   if (msg.type === 'fdbDrop' && sender.tab) {
-    deliverFile(msg.downloadId, sender.tab.id, msg.x, msg.y)
+    const drag = pendingDrag;
+    pendingDrag = null;
+    if (!drag || Date.now() - drag.at > DRAG_TTL_MS) {
+      sendResponse({ ok: false, error: 'no drag in progress' });
+      return;
+    }
+    deliverFile(drag.downloadId, sender.tab.id, msg.x, msg.y)
       .then(sendResponse)
       .catch((e) => {
         console.error('drag-drop delivery failed:', e);
@@ -51,9 +80,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// Injected into the page (isolated world). Listens for a drop carrying the
-// extension's drag type and forwards the download id to the worker. Only
-// genuine user drags (isTrusted) are accepted; all other drags are ignored.
+// Injected into the page (isolated world). Reports a drop carrying the
+// extension's drag type to the worker, which delivers whichever download the
+// popup said was being dragged. The marker type only decides whether to
+// intercept the drop; it never names a file, so a page setting it on its own
+// drags gains nothing.
 function installDropCatcher() {
   if (window.__fdbCatcherInstalled) return;
   window.__fdbCatcherInstalled = true;
@@ -79,21 +110,19 @@ function installDropCatcher() {
       if (!isOurs(e)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      const downloadId = Number(e.dataTransfer.getData(TYPE));
-      if (downloadId) {
-        chrome.runtime.sendMessage({
-          type: 'fdbDrop',
-          downloadId,
-          x: e.clientX,
-          y: e.clientY,
-        });
-      }
+      chrome.runtime.sendMessage({
+        type: 'fdbDrop',
+        x: e.clientX,
+        y: e.clientY,
+      });
     },
     true
   );
 }
 
-async function deliverFile(downloadId, tabId, x, y) {
+// x/y default to null (not undefined) because executeScript args must be
+// JSON-serializable; pageReceiveFile centres the drop when they're null.
+async function deliverFile(downloadId, tabId, x = null, y = null) {
   const [item] = await chrome.downloads.search({ id: downloadId });
   if (!item || !item.filename) return { ok: false, error: 'download not found' };
 
@@ -101,7 +130,12 @@ async function deliverFile(downloadId, tabId, x, y) {
   const ext = name.split('.').pop().toLowerCase();
   const mime = MIME_BY_EXT[ext] || 'application/octet-stream';
 
-  const blob = await fetch(toFileUrl(item.filename)).then((r) => r.blob());
+  let blob;
+  try {
+    blob = await fetchFileBlob(item.filename);
+  } catch {
+    return { ok: false, error: 'could not read file from disk' };
+  }
   if (blob.size > MAX_UPLOAD_BYTES) return { ok: false, error: 'too large' };
   const base64 = await blobToBase64(blob);
 
@@ -112,6 +146,22 @@ async function deliverFile(downloadId, tabId, x, y) {
     args: [base64, name, mime, x, y],
   });
   return (results && results[0] && results[0].result) || { ok: false };
+}
+
+// A freshly completed download can briefly be locked (e.g. antivirus
+// scanning it) before it's actually readable, so retry a few times with
+// backoff before giving up. Kept in sync with the copy in popup.js.
+async function fetchFileBlob(filename) {
+  const RETRY_DELAYS_MS = [150, 400, 800];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(toFileUrl(filename));
+      return await r.blob();
+    } catch (e) {
+      if (attempt >= RETRY_DELAYS_MS.length) throw e;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 // Base64-encode a blob in chunks (FileReader is unavailable in workers).

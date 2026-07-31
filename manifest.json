@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Persistent Download Button",
+  "name": "Persistent Downloads Button",
   "version": "1.0.0",
   "description": "A permanently accessible recent-downloads popup. View, reveal, and drag your latest downloads out of the browser.",
   "permissions": ["downloads", "downloads.open", "scripting", "activeTab"],

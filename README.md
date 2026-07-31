@@ -1,4 +1,4 @@
-# Persistent Download Button
+# Persistent Downloads Button
 
 Isn't it convenient to drag and drop files straight from the downloads
 button? Isn't it convenient to open files fast from the downloads button?
@@ -37,3 +37,17 @@ Its permissions are used only for the features above: `downloads` (list/open/
 reveal files), file access (read the file being uploaded), and
 `scripting`/`activeTab` (deliver the file into the page you drop it on, only
 after you act).
+
+## Security Features
+
+- **Pages can't pick the file** — a web page only ever reports *that* a drop
+  happened; the file delivered is whichever row you actually dragged, which
+  the popup tells the background worker directly. So a page can't ask for
+  something out of your download history that you didn't drag onto it.
+- **Trusted-input only** — the in-page drop listener ignores any event that
+  isn't `isTrusted`, so page script can't fake a drop to trigger delivery.
+- **No injected HTML** — file names are rendered with `textContent`, never
+  `innerHTML`, so a maliciously named file can't inject script.
+- **Size cap** — files over 100 MB are rejected rather than loaded.
+- **Least-privilege permissions** — only `downloads`, `downloads.open`,
+  `scripting`, `activeTab`, and `file:///*`; no remote code, no `eval`.

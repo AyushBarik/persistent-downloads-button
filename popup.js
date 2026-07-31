@@ -1,67 +1,24 @@
 const MAX_ITEMS = 50;
 
-// Size caps for pre-encoding files when their row scrolls into view.
-const PREFETCH_FILE_LIMIT = 20 * 1024 * 1024;
-const PREFETCH_TOTAL_BUDGET = 200 * 1024 * 1024;
-let prefetchedBytes = 0;
-
-const rowObserver = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    rowObserver.unobserve(entry.target);
-    const item = entry.target._downloadItem;
-    if (!item || !item.filename) continue;
-    if (b64Cache.has(item.id)) continue;
-    const size = item.fileSize > 0 ? item.fileSize : item.totalBytes;
-    if (size > PREFETCH_FILE_LIMIT) continue;
-    if (prefetchedBytes + size > PREFETCH_TOTAL_BUDGET) continue;
-    prefetchedBytes += size;
-    encodeFile(item).catch(() => {
-      prefetchedBytes -= size;
-    });
-  }
-});
-
 let hasFileSchemeAccess = false;
 let renderTimer = null;
+let probeTimer = null;
 
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-
-// Cache of base64 file payloads, keyed by download id. Holds promises so
-// concurrent callers share a single read.
-const b64Cache = new Map();
+// File icons by download id; they never change, so fetch each one once.
+const iconCache = new Map();
 
 // Records the result of a file read and toggles the file-access notice.
+// Polling runs exactly while the notice is up: a success stops it, and a
+// later failure restarts it so the notice can clear itself again.
 function noteFileRead(ok) {
   hasFileSchemeAccess = ok;
   document.getElementById('file-access-notice').hidden = ok;
-}
-
-function encodeFile(item) {
-  let promise = b64Cache.get(item.id);
-  if (promise) return promise;
-  promise = (async () => {
-    let blob;
-    try {
-      const r = await fetch(toFileUrl(item.filename));
-      blob = await r.blob();
-    } catch (e) {
-      noteFileRead(false);
-      throw e;
-    }
-    noteFileRead(true);
-    if (blob.size > MAX_UPLOAD_BYTES) throw new Error('too large');
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result.split(',', 2)[1]);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  })();
-  // Drop failed reads from the cache so a later click can retry.
-  promise.catch(() => b64Cache.delete(item.id));
-  b64Cache.set(item.id, promise);
-  return promise;
+  if (ok) {
+    clearInterval(probeTimer);
+    probeTimer = null;
+  } else if (!probeTimer) {
+    probeTimer = setInterval(probeFileAccess, 1500);
+  }
 }
 
 const MIME_BY_EXT = {
@@ -104,23 +61,9 @@ async function init() {
   document.getElementById('open-settings').addEventListener('click', () => {
     chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
   });
-  // While the notice is showing, probe file access with a real read and
-  // hide the notice once a read succeeds.
-  setInterval(async () => {
-    if (hasFileSchemeAccess) return;
-    const items = await chrome.downloads.search({
-      orderBy: ['-startTime'],
-      limit: MAX_ITEMS,
-    });
-    const probe = items.find(
-      (i) => i.state === 'complete' && i.exists !== false && i.filename
-    );
-    if (probe) {
-      encodeFile(probe)
-        .then(() => noteFileRead(true))
-        .catch(() => {});
-    }
-  }, 1500);
+  // The toggle can be flipped while the popup is open, and Chrome doesn't
+  // notify us, so poll until a read works. noteFileRead stops the poll.
+  if (!hasFileSchemeAccess) probeTimer = setInterval(probeFileAccess, 1500);
 
   // Install the drop catcher on the active tab.
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
@@ -145,6 +88,26 @@ async function init() {
   chrome.downloads.onErased.addListener(scheduleRender);
 }
 
+// One plain fetch of any real download: succeeding proves file access is on.
+// No retry/backoff here — this poll is itself the retry, and missing access
+// is a permanent state until the user flips the toggle.
+async function probeFileAccess() {
+  const items = await chrome.downloads.search({
+    orderBy: ['-startTime'],
+    limit: MAX_ITEMS,
+  });
+  const probe = items.find(
+    (i) => i.state === 'complete' && i.exists !== false && i.filename
+  );
+  if (!probe) return;
+  try {
+    await fetch(toFileUrl(probe.filename));
+    noteFileRead(true);
+  } catch {
+    // Still no access; the next tick will try again.
+  }
+}
+
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(render, 150);
@@ -158,7 +121,6 @@ async function render() {
 
   const list = document.getElementById('list');
   const empty = document.getElementById('empty');
-  rowObserver.disconnect();
   list.textContent = '';
   empty.hidden = items.length > 0;
 
@@ -179,9 +141,18 @@ function buildRow(item) {
   const icon = document.createElement('img');
   icon.className = 'file-icon';
   icon.alt = '';
-  chrome.downloads.getFileIcon(item.id, { size: 32 }, (url) => {
-    if (!chrome.runtime.lastError && url) icon.src = url;
-  });
+  // Icons never change for a given download, and re-renders are frequent
+  // while a download is in progress, so fetch each one only once.
+  const cachedIcon = iconCache.get(item.id);
+  if (cachedIcon) {
+    icon.src = cachedIcon;
+  } else {
+    chrome.downloads.getFileIcon(item.id, { size: 32 }, (url) => {
+      if (chrome.runtime.lastError || !url) return;
+      iconCache.set(item.id, url);
+      icon.src = url;
+    });
+  }
   row.appendChild(icon);
 
   const meta = document.createElement('div');
@@ -196,8 +167,6 @@ function buildRow(item) {
   row.appendChild(meta);
 
   if (complete && !missing) {
-    row._downloadItem = item;
-    rowObserver.observe(row);
     const uploadBtn = document.createElement('button');
     uploadBtn.className = 'show-btn upload-btn';
     uploadBtn.title = 'Upload to current page';
@@ -205,7 +174,7 @@ function buildRow(item) {
       '<svg viewBox="0 0 24 24"><path d="M12 3l5 5h-3v6h-4V8H7l5-5zM5 19h14v2H5v-2z"/></svg>';
     uploadBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      uploadToPage(item, name, sub);
+      uploadToPage(item, sub);
     });
     row.appendChild(uploadBtn);
   }
@@ -267,14 +236,25 @@ function setupDrag(row, item, name) {
     ev.dataTransfer.effectAllowed = 'copy';
     ev.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${url}`);
 
-    // Carry the download id for the in-page drop catcher.
-    ev.dataTransfer.setData('application/x-fdb-download-id', String(item.id));
+    // Marker so the in-page catcher knows to intercept this drop; the file
+    // itself is identified by telling the worker what we're dragging.
+    ev.dataTransfer.setData('application/x-fdb-download-id', '1');
+    chrome.runtime
+      .sendMessage({ type: 'fdbDragStart', downloadId: item.id })
+      .catch(() => {});
   });
 
   row.addEventListener('dragend', () => row.classList.remove('dragging'));
 }
 
-async function uploadToPage(item, name, statusEl) {
+// Reads and injects happen in the background worker, which already does
+// exactly this for drag-and-drop; going through it keeps one delivery path.
+const UPLOAD_ERRORS = {
+  'too large': 'File too large (100 MB max)',
+  'could not read file from disk': 'Could not read file from disk',
+};
+
+async function uploadToPage(item, statusEl) {
   const restore = statusEl.textContent;
   const fail = (msg) => {
     statusEl.textContent = msg;
@@ -282,17 +262,6 @@ async function uploadToPage(item, name, statusEl) {
   };
 
   statusEl.textContent = 'Uploading…';
-  let base64;
-  try {
-    base64 = await encodeFile(item);
-  } catch (e) {
-    fail(
-      e && e.message === 'too large'
-        ? 'File too large (100 MB max)'
-        : 'Could not read file from disk'
-    );
-    return;
-  }
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) {
@@ -300,84 +269,21 @@ async function uploadToPage(item, name, statusEl) {
     return;
   }
 
-  let results;
-  try {
-    results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: 'MAIN',
-      func: pageReceiveFile,
-      args: [base64, name, guessMime(name)],
-    });
-  } catch (e) {
-    fail("Can't upload on this page");
-    console.error('executeScript failed:', e);
-    return;
-  }
+  const outcome = await chrome.runtime
+    .sendMessage({ type: 'fdbUpload', downloadId: item.id, tabId: tab.id })
+    .catch(() => null);
 
-  const outcome = results && results[0] && results[0].result;
   if (outcome && outcome.ok) {
     statusEl.textContent = `Sent to page ✓ (${outcome.method})`;
     setTimeout(() => window.close(), 250);
-  } else {
-    console.error('page injection outcome:', outcome);
-    fail(
-      outcome && outcome.error
-        ? `Error: ${outcome.error.slice(0, 60)}`
-        : 'Page did not accept the file'
-    );
+    return;
   }
-}
-
-// Injected into the target page (MAIN world). Rebuilds the File and hands it
-// to a file input if one exists, otherwise dispatches a drop event.
-// Self-contained: has no access to outer-scope variables.
-function pageReceiveFile(base64, name, mime) {
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const file = new File([bytes], name, { type: mime });
-
-    const dt = new DataTransfer();
-    dt.items.add(file);
-
-    const inputs = Array.from(
-      document.querySelectorAll('input[type="file"]')
-    ).filter((el) => !el.disabled);
-    const input = inputs.find((el) => el.offsetParent) || inputs[0];
-    if (input) {
-      input.files = dt.files;
-      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      return { ok: true, method: 'input' };
-    }
-
-    const x = Math.floor(window.innerWidth / 2);
-    const y = Math.floor(window.innerHeight / 2);
-    const target =
-      document.activeElement && document.activeElement !== document.body
-        ? document.activeElement
-        : document.elementFromPoint(x, y) || document.body;
-
-    let accepted = false;
-    for (const type of ['dragenter', 'dragover', 'drop']) {
-      const ev = new DragEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        clientX: x,
-        clientY: y,
-        dataTransfer: dt,
-      });
-      target.dispatchEvent(ev);
-      if (type === 'drop') accepted = ev.defaultPrevented;
-    }
-    if (accepted) return { ok: true, method: 'drop' };
-
-    return { ok: false, error: 'no file input found and drop not handled' };
-  } catch (e) {
-    return { ok: false, error: String(e && e.message ? e.message : e) };
-  }
+  const error = outcome && outcome.error;
+  if (error === 'could not read file from disk') noteFileRead(false);
+  fail(
+    (error && UPLOAD_ERRORS[error]) ||
+      (error ? `Error: ${error.slice(0, 60)}` : "Can't upload on this page")
+  );
 }
 
 function displayName(item) {
